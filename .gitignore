@@ -1,0 +1,27 @@
+# Build artifacts
+dist/
+build/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Runtime / temp
+*.npy
+mywhisper_*.npy
+*.log
+
+# OS junk
+NUL
+Thumbs.db
+desktop.ini
+
+# Local config
+config.json

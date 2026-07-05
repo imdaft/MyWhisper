@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+import numpy as np
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+
+from src.config import Config
+
+if TYPE_CHECKING:
+    from src.audio_recorder import AudioRecorder
+    from src.hotkey_manager import HotkeyManager
+    from src.overlay_widget import OverlayWidget
+    from src.text_inserter import TextInserter
+    from src.transcriber import Transcriber
+    from src.tray_icon import TrayIcon
+
+logger = logging.getLogger(__name__)
+
+
+class TranscriptionWorker(QObject):
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, transcriber: Transcriber, audio: np.ndarray, language: str) -> None:
+        super().__init__()
+        self._transcriber = transcriber
+        self._audio = audio
+        self._language = language
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            lang = self._language if self._language != "auto" else None
+            text = self._transcriber.transcribe(self._audio, language=lang)
+            self.finished.emit(text)
+        except Exception as exc:
+            logger.error("Transcription failed: %s", exc, exc_info=True)
+            self.error.emit(str(exc))
+
+
+class _ModelLoader(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, transcriber: Transcriber, model_size: str, compute_type: str) -> None:
+        super().__init__()
+        self._transcriber = transcriber
+        self._model_size = model_size
+        self._compute_type = compute_type
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            self._transcriber.load_model(self._model_size, compute_type=self._compute_type)
+            if self._transcriber.is_model_loaded():
+                self.finished.emit()
+            else:
+                self.error.emit("Model failed to load")
+        except Exception as exc:
+            logger.error("Model loading failed: %s", exc, exc_info=True)
+            self.error.emit(str(exc))
+
+
+class App(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self._config = Config()
+        self._worker_thread: QThread | None = None
+        self._worker: TranscriptionWorker | None = None
+        self._model_loader_thread: QThread | None = None
+        self._model_loader: _ModelLoader | None = None
+
+        self._hotkey_manager: HotkeyManager | None = None
+        self._audio_recorder: AudioRecorder | None = None
+        self._transcriber: Transcriber | None = None
+        self._text_inserter: TextInserter | None = None
+        self._tray_icon: TrayIcon | None = None
+        self._overlay: OverlayWidget | None = None
+
+    def start(self) -> None:
+        self._create_components()
+        self._connect_signals()
+        self._hotkey_manager.start()  # type: ignore[union-attr]
+        self._tray_icon.show()  # type: ignore[union-attr]
+        logger.info("App started, loading model in background...")
+        self._load_model_async()
+
+    def _create_components(self) -> None:
+        from src.audio_recorder import AudioRecorder
+        from src.hotkey_manager import HotkeyManager
+        from src.overlay_widget import OverlayWidget
+        from src.text_inserter import TextInserter
+        from src.transcriber import Transcriber
+        from src.tray_icon import TrayIcon
+
+        device = self._config.get("audio_device")
+        self._audio_recorder = AudioRecorder(device_id=device)
+        self._transcriber = Transcriber()
+        self._text_inserter = TextInserter()
+        self._tray_icon = TrayIcon()
+        self._overlay = OverlayWidget(
+            position=self._config.get("overlay_position", "bottom_center"),
+        )
+
+        hotkey = self._config.get("hotkey", ["ctrl", "shift", "space"])
+        mode = self._config.get("hotkey_mode", "hold")
+        self._hotkey_manager = HotkeyManager(keys=tuple(hotkey), mode=mode)
+
+    def _connect_signals(self) -> None:
+        hm = self._hotkey_manager
+        assert hm is not None
+        hm.recording_start_requested.connect(self._on_recording_start)
+        hm.recording_stop_requested.connect(self._on_recording_stop)
+
+        assert self._audio_recorder is not None
+        self._audio_recorder.level_changed.connect(self._on_audio_level)
+
+        assert self._tray_icon is not None
+        self._tray_icon.settings_requested.connect(self._on_settings_requested)
+        self._tray_icon.quit_requested.connect(self._on_quit_requested)
+
+        self._config.config_changed.connect(self._on_config_changed)
+
+    def _load_model_async(self) -> None:
+        assert self._transcriber is not None
+        model_size = self._config.get("model_size", "base")
+        compute_type = self._config.get("compute_type", "auto")
+
+        self._model_loader_thread = QThread()
+        self._model_loader = _ModelLoader(self._transcriber, model_size, compute_type)
+        self._model_loader.moveToThread(self._model_loader_thread)
+        self._model_loader_thread.started.connect(self._model_loader.run)
+        self._model_loader.finished.connect(self._on_model_loaded)
+        self._model_loader.error.connect(self._on_model_load_error)
+        self._model_loader.finished.connect(self._model_loader_thread.quit)
+        self._model_loader.error.connect(self._model_loader_thread.quit)
+        # Clean up only AFTER the thread has fully stopped
+        self._model_loader_thread.finished.connect(self._cleanup_model_loader)
+        self._model_loader_thread.start()
+
+    @pyqtSlot()
+    def _on_model_loaded(self) -> None:
+        logger.info("Model loaded successfully")
+
+    @pyqtSlot(str)
+    def _on_model_load_error(self, error_msg: str) -> None:
+        logger.error("Failed to load model: %s", error_msg)
+
+    @pyqtSlot()
+    def _cleanup_model_loader(self) -> None:
+        self._model_loader = None
+        self._model_loader_thread = None
+
+    @pyqtSlot()
+    def _on_recording_start(self) -> None:
+        logger.info("Recording started")
+        assert self._audio_recorder is not None
+        assert self._overlay is not None
+        assert self._tray_icon is not None
+
+        self._audio_recorder.start_recording()
+        self._overlay.show_recording()
+        self._tray_icon.set_status("recording")
+
+    @pyqtSlot()
+    def _on_recording_stop(self) -> None:
+        logger.info("Recording stopped")
+        assert self._audio_recorder is not None
+        assert self._overlay is not None
+        assert self._tray_icon is not None
+        assert self._transcriber is not None
+
+        audio = self._audio_recorder.stop_recording()
+        self._overlay.show_processing()
+        self._tray_icon.set_status("processing")
+
+        if audio is None or len(audio) == 0:
+            logger.warning("Empty audio captured, skipping transcription")
+            self._finalize_transcription("")
+            return
+
+        self._start_transcription(audio)
+
+    def _start_transcription(self, audio: np.ndarray) -> None:
+        language = self._config.get("language", "auto")
+
+        self._worker_thread = QThread()
+        self._worker = TranscriptionWorker(
+            self._transcriber,  # type: ignore[arg-type]
+            audio,
+            language,
+        )
+        self._worker.moveToThread(self._worker_thread)
+
+        self._worker_thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_transcription_done)
+        self._worker.error.connect(self._on_transcription_error)
+        self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._cleanup_worker)
+
+        self._worker_thread.start()
+
+    @pyqtSlot(str)
+    def _on_transcription_done(self, text: str) -> None:
+        logger.info("Transcription done: %d chars", len(text))
+        self._finalize_transcription(text)
+
+    @pyqtSlot(str)
+    def _on_transcription_error(self, error_msg: str) -> None:
+        logger.error("Transcription error: %s", error_msg)
+        self._finalize_transcription("")
+
+    def _finalize_transcription(self, text: str) -> None:
+        assert self._overlay is not None
+        assert self._tray_icon is not None
+        assert self._text_inserter is not None
+
+        clean = text.strip()
+        if clean:
+            self._text_inserter.insert_text(clean)
+            self._tray_icon.show_last_phrase(clean)
+
+        self._overlay.hide_overlay()
+        self._tray_icon.set_status("idle")
+
+    def _cleanup_worker(self) -> None:
+        self._worker = None
+        self._worker_thread = None
+
+    @pyqtSlot(float)
+    def _on_audio_level(self, level: float) -> None:
+        if self._overlay is not None:
+            self._overlay.update_level(level)
+
+    @pyqtSlot()
+    def _on_settings_requested(self) -> None:
+        from src.settings_window import SettingsWindow
+
+        dialog = SettingsWindow(self._config)
+        if self._transcriber is not None:
+            dialog.set_model_status(self._transcriber.is_model_loaded())
+        dialog.exec()
+
+    @pyqtSlot()
+    def _on_quit_requested(self) -> None:
+        logger.info("Quit requested by user")
+        self.cleanup()
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().quit()  # type: ignore[union-attr]
+
+    @pyqtSlot(str, object)
+    def _on_config_changed(self, key: str, value: object) -> None:
+        logger.info("Config changed: %s = %s", key, value)
+
+        if key == "hotkey" and self._hotkey_manager is not None:
+            self._hotkey_manager.set_hotkey(tuple(value))  # type: ignore[arg-type]
+        elif key == "hotkey_mode" and self._hotkey_manager is not None:
+            self._hotkey_manager.set_mode(value)  # type: ignore[arg-type]
+        elif key == "model_size":
+            self._load_model_async()
+        elif key == "audio_device" and self._audio_recorder is not None:
+            self._audio_recorder.set_device(value)  # type: ignore[arg-type]
+        elif key == "overlay_position" and self._overlay is not None:
+            self._overlay.set_position(value)  # type: ignore[arg-type]
+
+    def cleanup(self) -> None:
+        logger.info("Cleaning up...")
+        if self._worker_thread is not None and self._worker_thread.isRunning():
+            self._worker_thread.quit()
+            self._worker_thread.wait(5000)
+
+        if self._hotkey_manager is not None:
+            self._hotkey_manager.stop()
+
+        if self._transcriber is not None:
+            self._transcriber.shutdown()
+
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
+
+        if self._overlay is not None:
+            self._overlay.hide_overlay()
+
+        logger.info("Cleanup complete")
