@@ -103,6 +103,13 @@ class Transcriber(QObject):
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
 
+            # Force the worker's Python stdio to UTF-8 regardless of the Windows
+            # locale so Cyrillic (and any non-ASCII) transcriptions round-trip.
+            # errors="replace" keeps one stray byte from killing the protocol.
+            env = dict(os.environ)
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
+
             self._proc = subprocess.Popen(
                 _get_worker_cmd(),
                 stdin=subprocess.PIPE,
@@ -110,7 +117,9 @@ class Transcriber(QObject):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 creationflags=creationflags,
+                env=env,
             )
             logger.info("Whisper worker process started (pid=%d)", self._proc.pid)
 

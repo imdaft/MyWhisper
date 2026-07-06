@@ -22,6 +22,15 @@ import sys
 
 
 def main() -> None:
+    # Force UTF-8 on the pipe in both directions. Without this the worker uses
+    # the Windows locale (e.g. cp1251), which corrupts Cyrillic transcriptions
+    # and breaks the JSON protocol the parent reads as UTF-8.
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     model = None
 
     for raw_line in sys.stdin:
