@@ -60,6 +60,11 @@ def _detect_device() -> str:
 def _resolve_device(pref: str) -> str:
     """Turn a user device preference (auto/cpu/cuda) into a real device, falling
     back to CPU if a GPU was requested but none is available."""
+    # Frozen builds don't bundle the ~1 GB of cuDNN libraries ctranslate2 needs
+    # for GPU inference (they'd otherwise crash mid-transcription). Force CPU
+    # there; run from source (python run.py) for GPU acceleration.
+    if getattr(sys, "frozen", False):
+        return "cpu"
     if pref == "cpu":
         return "cpu"
     if pref in ("cuda", "gpu"):
