@@ -483,10 +483,10 @@ class SettingsWindow(QDialog):
         try:
             from src.audio_recorder import AudioRecorder
 
-            self._audio_recorder = AudioRecorder(self)
+            # Pass the selected device (None = system default) as device_id;
+            # `self` must go to parent, not the device_id slot.
             device_id = self._mic_combo.currentData()
-            if device_id is not None:
-                self._audio_recorder.set_device(device_id)
+            self._audio_recorder = AudioRecorder(device_id=device_id, parent=self)
             self._audio_recorder.level_changed.connect(self._on_mic_level)
             self._audio_recorder.start_recording()
 
