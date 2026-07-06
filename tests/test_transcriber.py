@@ -246,10 +246,13 @@ class TestTranscribe(unittest.TestCase):
 
 class TestHelperFunctions(unittest.TestCase):
 
-    def test_detect_device_cpu_no_torch(self) -> None:
-        with patch.dict("sys.modules", {"torch": None}):
-            result = _detect_device()
-        self.assertEqual(result, "cpu")
+    def test_detect_device_cpu_when_no_cuda(self) -> None:
+        with patch("ctranslate2.get_cuda_device_count", return_value=0):
+            self.assertEqual(_detect_device(), "cpu")
+
+    def test_detect_device_cuda_when_available(self) -> None:
+        with patch("ctranslate2.get_cuda_device_count", return_value=1):
+            self.assertEqual(_detect_device(), "cuda")
 
     def test_resolve_compute_type_auto_cpu(self) -> None:
         self.assertEqual(_resolve_compute_type("auto", "cpu"), "int8")

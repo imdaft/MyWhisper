@@ -21,6 +21,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "theme": "dark",
     "autostart": False,
     "compute_type": "auto",
+    # User dictionary: names / terms fed to Whisper as hotwords to improve
+    # recognition. Free text, one word or phrase per line.
+    "custom_words": "",
 }
 
 

@@ -69,14 +69,19 @@ def main() -> None:
                 if lang is not None and (len(lang) > 10 or not lang.isalpha()):
                     lang = None
 
+                # User dictionary: bias recognition toward these words/phrases.
+                hotwords = (msg.get("hotwords") or "").strip()[:2000] or None
+
                 # Try with VAD filter; fall back if onnxruntime is missing
                 try:
                     segments, info = model.transcribe(
                         audio, language=lang, beam_size=5, vad_filter=True,
+                        hotwords=hotwords,
                     )
                 except Exception:
                     segments, info = model.transcribe(
                         audio, language=lang, beam_size=5, vad_filter=False,
+                        hotwords=hotwords,
                     )
                 text = "".join(seg.text for seg in segments).strip()
                 _respond({

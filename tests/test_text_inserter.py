@@ -11,6 +11,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.text_inserter import TextInserter
 
+# The clipboard path is what these tests exercise; force the "clipboard holds
+# only text" branch so results don't depend on the machine's real clipboard.
+_nontext_patcher = None
+
+
+def setUpModule() -> None:
+    global _nontext_patcher
+    _nontext_patcher = patch("src.text_inserter._clipboard_has_nontext", return_value=False)
+    _nontext_patcher.start()
+
+
+def tearDownModule() -> None:
+    if _nontext_patcher is not None:
+        _nontext_patcher.stop()
+
 
 class TestInsertTextEmpty(unittest.TestCase):
     """insert_text with empty or falsy string should return False immediately."""

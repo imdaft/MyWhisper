@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -30,17 +31,22 @@ class TranscriptionWorker(QObject):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, transcriber: Transcriber, audio: np.ndarray, language: str) -> None:
+    def __init__(
+        self, transcriber: Transcriber, audio: np.ndarray, language: str, hotwords: str = "",
+    ) -> None:
         super().__init__()
         self._transcriber = transcriber
         self._audio = audio
         self._language = language
+        self._hotwords = hotwords
 
     @pyqtSlot()
     def run(self) -> None:
         try:
             lang = self._language if self._language != "auto" else None
-            text = self._transcriber.transcribe(self._audio, language=lang)
+            text = self._transcriber.transcribe(
+                self._audio, language=lang, hotwords=self._hotwords or None,
+            )
             self.finished.emit(text)
         except Exception as exc:
             logger.error("Transcription failed: %s", exc, exc_info=True)
@@ -90,6 +96,7 @@ class App(QObject):
     def start(self) -> None:
         self._create_components()
         self._connect_signals()
+        self._apply_theme(self._config.get("theme", "dark"))
         self._apply_autostart(self._config.get("autostart", False))
         self._hotkey_manager.start()  # type: ignore[union-attr]
         self._tray_icon.show()  # type: ignore[union-attr]
@@ -262,12 +269,14 @@ class App(QObject):
 
     def _start_transcription(self, audio: np.ndarray) -> None:
         language = self._config.get("language", "auto")
+        hotwords = self._hotwords_from_config()
 
         self._worker_thread = QThread()
         self._worker = TranscriptionWorker(
             self._transcriber,  # type: ignore[arg-type]
             audio,
             language,
+            hotwords,
         )
         self._worker.moveToThread(self._worker_thread)
 
@@ -293,6 +302,15 @@ class App(QObject):
                 "MyWhisper", "Не удалось распознать речь. Подробности в журнале.", "error",
             )
         self._finalize_transcription("")
+
+        # If the worker died, the model is gone — reload it so the next hotkey
+        # press works instead of failing forever.
+        if self._transcriber is not None and not self._transcriber.is_model_loaded():
+            logger.info("Model lost after worker failure, reloading in background")
+            self._model_ready = False
+            if self._tray_icon is not None:
+                self._tray_icon.setToolTip("MyWhisper — переподключение к модели…")
+            self._load_model_async()
 
     def _finalize_transcription(self, text: str) -> None:
         assert self._overlay is not None
@@ -349,10 +367,26 @@ class App(QObject):
             self._audio_recorder.set_device(value)  # type: ignore[arg-type]
         elif key == "overlay_position" and self._overlay is not None:
             self._overlay.set_position(value)  # type: ignore[arg-type]
-        elif key == "theme" and self._overlay is not None:
-            self._overlay.set_theme(value)  # type: ignore[arg-type]
+        elif key == "theme":
+            self._apply_theme(value)  # type: ignore[arg-type]
         elif key == "autostart":
             self._apply_autostart(bool(value))
+        elif key == "custom_words":
+            logger.info("Custom dictionary updated (%d chars)", len(value or ""))
+
+    def _hotwords_from_config(self) -> str:
+        """Turn the user's dictionary (one word/phrase per line or comma) into a
+        single hotwords string for faster-whisper."""
+        raw = self._config.get("custom_words", "") or ""
+        words = [w.strip() for w in re.split(r"[\n,]+", raw) if w.strip()]
+        return ", ".join(words)
+
+    def _apply_theme(self, theme: str) -> None:
+        from PyQt6.QtWidgets import QApplication
+        from src.theme import apply_theme
+        apply_theme(QApplication.instance(), theme)
+        if self._overlay is not None:
+            self._overlay.set_theme(theme)
 
     def _apply_autostart(self, enabled: bool) -> None:
         try:

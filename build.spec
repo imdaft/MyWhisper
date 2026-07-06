@@ -38,10 +38,15 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # Keep the bundle lean regardless of the build environment. None of
+        # these are used by MyWhisper (faster-whisper runs on CTranslate2, not
+        # torch/transformers). onnxruntime is NOT excluded — it powers the VAD.
         'tkinter', 'matplotlib', 'PIL',
         'onnx', 'onnx.reference',
         'torch', 'torchvision', 'torchaudio',
-        'scipy', 'pandas', 'numba',
+        'transformers', 'tensorboard',
+        'jax', 'jaxlib', 'cv2', 'altair',
+        'scipy', 'pandas', 'numba', 'sympy', 'networkx', 'sklearn',
         'IPython', 'jupyter', 'notebook',
         'pytest', 'setuptools', 'pip',
     ],

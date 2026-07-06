@@ -30,8 +30,15 @@ _MODIFIERS_TO_RELEASE = [
 # --- Win32 SendInput structures (correct for x64) ---
 _INPUT_KEYBOARD = 1
 _KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_UNICODE = 0x0004
 _VK_CONTROL = 0x11
 _VK_V = 0x56
+
+# Clipboard formats that pyperclip.copy() would silently destroy.
+_CF_BITMAP = 2
+_CF_DIB = 8
+_CF_DIBV5 = 17
+_CF_HDROP = 15  # file list
 
 ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
 
@@ -100,6 +107,42 @@ def _send_ctrl_v() -> None:
     logger.debug("SendInput sent %d of 4 events (sizeof INPUT=%d)", sent, ctypes.sizeof(_INPUT))
 
 
+def _type_text_unicode(text: str) -> None:
+    """Type text character-by-character via SendInput with Unicode scan codes.
+
+    Used when the clipboard holds non-text data we must not overwrite. Handles
+    characters outside the BMP (e.g. emoji) via UTF-16 surrogate pairs.
+    """
+    for ch in text:
+        raw = ch.encode("utf-16-le")
+        units = [raw[i] | (raw[i + 1] << 8) for i in range(0, len(raw), 2)]
+        n = len(units) * 2
+        inputs = (_INPUT * n)()
+        idx = 0
+        for unit in units:
+            for flags in (_KEYEVENTF_UNICODE, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP):
+                inputs[idx].type = _INPUT_KEYBOARD
+                inputs[idx].u.ki.wVk = 0
+                inputs[idx].u.ki.wScan = unit
+                inputs[idx].u.ki.dwFlags = flags
+                inputs[idx].u.ki.time = 0
+                idx += 1
+        ctypes.windll.user32.SendInput(n, ctypes.byref(inputs), ctypes.sizeof(_INPUT))
+
+
+def _clipboard_has_nontext() -> bool:
+    """True if the clipboard holds an image or file list that pyperclip.copy()
+    would silently destroy. Uses Win32 directly (no clipboard open needed)."""
+    try:
+        user32 = ctypes.windll.user32
+        for fmt in (_CF_BITMAP, _CF_DIB, _CF_DIBV5, _CF_HDROP):
+            if user32.IsClipboardFormatAvailable(fmt):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 class TextInserter:
     def __init__(self) -> None:
         self._kb = KbController()
@@ -119,6 +162,17 @@ class TextInserter:
 
         # Release ALL held modifier keys (including Ctrl from user hotkey)
         self._release_modifiers()
+
+        # If the clipboard holds an image or files, typing the text directly
+        # avoids destroying that content (and is the SPEC's paste fallback).
+        if _clipboard_has_nontext():
+            try:
+                _type_text_unicode(text)
+                logger.info("Text typed directly (%d chars, clipboard preserved)", len(text))
+                return True
+            except Exception:
+                logger.error("Failed to insert text via typing")
+                return False
 
         saved_clipboard: str | None = None
         try:

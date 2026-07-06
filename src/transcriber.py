@@ -21,6 +21,7 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     {"name": "small", "size_mb": 500, "description": "Good quality, moderate speed."},
     {"name": "medium", "size_mb": 1500, "description": "High quality, slower transcription."},
     {"name": "large-v3", "size_mb": 3000, "description": "Best quality, requires significant resources."},
+    {"name": "large-v3-turbo", "size_mb": 1600, "description": "Near large-v3 quality, much faster. Best with a GPU."},
 ]
 
 _VALID_MODEL_NAMES: set[str] = {m["name"] for m in AVAILABLE_MODELS}
@@ -43,11 +44,14 @@ def _get_worker_cmd() -> list[str]:
 
 
 def _detect_device() -> str:
+    # Use CTranslate2 (the faster-whisper backend) to detect a usable GPU. This
+    # avoids depending on torch just for device detection — torch is a ~2 GB
+    # dependency that faster-whisper does not otherwise need.
     try:
-        import torch
-        if torch.cuda.is_available():
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
             return "cuda"
-    except ImportError:
+    except Exception:
         pass
     return "cpu"
 
@@ -196,7 +200,9 @@ class Transcriber(QObject):
             logger.error(msg)
             self.error.emit(msg)
 
-    def transcribe(self, audio: np.ndarray, language: str | None = None) -> str:
+    def transcribe(
+        self, audio: np.ndarray, language: str | None = None, hotwords: str | None = None,
+    ) -> str:
         if self._proc is None or self._proc.poll() is not None:
             msg = "No model loaded. Call load_model() first."
             logger.error(msg)
@@ -218,6 +224,7 @@ class Transcriber(QObject):
                         "cmd": "transcribe",
                         "audio_path": tmp_path,
                         "language": language or "auto",
+                        "hotwords": hotwords or "",
                     },
                     timeout=_TRANSCRIBE_TIMEOUT,
                 )

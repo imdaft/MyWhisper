@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QTabWidget,
@@ -46,6 +47,7 @@ _MODELS: list[tuple[str, str]] = [
     ("small", "small (~500MB)"),
     ("medium", "medium (~1.5GB)"),
     ("large-v3", "large-v3 (~3GB)"),
+    ("large-v3-turbo", "large-v3-turbo (~1.5GB, быстрый)"),
 ]
 
 _COMPUTE_OPTIONS: list[tuple[str, str]] = [
@@ -259,6 +261,7 @@ class SettingsWindow(QDialog):
 
         self._build_general_tab()
         self._build_audio_model_tab()
+        self._build_dictionary_tab()
         self._build_appearance_tab()
 
         self._button_box = QDialogButtonBox(
@@ -369,6 +372,25 @@ class SettingsWindow(QDialog):
 
         self._tabs.addTab(tab, "Appearance")
 
+    def _build_dictionary_tab(self) -> None:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(8)
+
+        hint = QLabel(
+            "Слова и имена, которые Whisper часто распознаёт неверно — по одному "
+            "в строке. Например: имена коллег, названия продуктов, термины."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._dictionary_edit = QPlainTextEdit()
+        self._dictionary_edit.setPlaceholderText("ZumZam\nОблачко\n…")
+        layout.addWidget(self._dictionary_edit)
+
+        self._tabs.addTab(tab, "Словарь")
+
     def _populate_microphones(self) -> None:
         self._mic_combo.clear()
         self._mic_combo.addItem("Default", None)
@@ -422,6 +444,9 @@ class SettingsWindow(QDialog):
         overlay: str = self._config.get("overlay_position", "bottom_center")
         self._set_combo_by_data(self._overlay_combo, overlay)
 
+        custom_words: str = self._config.get("custom_words", "")
+        self._dictionary_edit.setPlainText(custom_words)
+
     def _apply_settings(self) -> None:
         self._config.set("hotkey", self._hotkey_recorder.get_hotkey_config())
         self._config.set("hotkey_mode", self._mode_combo.currentData())
@@ -432,6 +457,7 @@ class SettingsWindow(QDialog):
         self._config.set("compute_type", self._compute_combo.currentData())
         self._config.set("theme", self._theme_combo.currentData())
         self._config.set("overlay_position", self._overlay_combo.currentData())
+        self._config.set("custom_words", self._dictionary_edit.toPlainText())
         self.settings_applied.emit()
 
     def _on_ok(self) -> None:

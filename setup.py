@@ -8,7 +8,7 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
-        "faster-whisper>=1.0.0",
+        "faster-whisper>=1.0.3",
         "PyQt6>=6.6.0",
         "sounddevice>=0.4.6",
         "numpy>=1.24.0",
