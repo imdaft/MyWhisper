@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec file for MyWhisper
-# Build: pyinstaller build.spec
+# Build with a python.org install (3.10-3.11), NOT the Microsoft Store Python:
+# native extensions (ctranslate2) segfault at runtime when frozen under the
+# Store Python. On this machine: py -3.11 -m PyInstaller build.spec --noconfirm --clean
 # Output: dist/MyWhisper/ (directory with MyWhisper.exe)
 
 import sys

@@ -34,12 +34,15 @@ python run.py
 
 ## Сборка .exe
 
+Собирать нужно обычным Python с python.org (3.10–3.11), **не** версией из
+Microsoft Store: упакованный ctranslate2 из Store-Python падает при запуске.
+
 ```bash
-pip install pyinstaller
-pyinstaller build.spec
+py -3.11 -m pip install pyinstaller
+py -3.11 -m PyInstaller build.spec --noconfirm --clean
 ```
 
-Готовое приложение появится в `dist/MyWhisper/`.
+Готовое приложение появится в `dist/MyWhisper/` (~350 МБ).
 
 ## Использование
 
