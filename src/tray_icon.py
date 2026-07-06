@@ -130,6 +130,15 @@ class TrayIcon(QSystemTrayIcon):
         self._last_phrase_action.setText(f"Last: {display}")
         self.showMessage("MyWhisper", text, QSystemTrayIcon.MessageIcon.Information, 3000)
 
+    def notify(self, title: str, message: str, level: str = "info") -> None:
+        """Show a tray balloon notification (info / warning / error)."""
+        icon = {
+            "info": QSystemTrayIcon.MessageIcon.Information,
+            "warning": QSystemTrayIcon.MessageIcon.Warning,
+            "error": QSystemTrayIcon.MessageIcon.Critical,
+        }.get(level, QSystemTrayIcon.MessageIcon.Information)
+        self.showMessage(title, message, icon, 4000)
+
     @property
     def status(self) -> str:
         return self._status

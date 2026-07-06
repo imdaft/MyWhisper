@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -26,7 +27,13 @@ def _setup_logging() -> None:
     root.setLevel(logging.INFO)
 
     try:
-        fh = logging.FileHandler(str(log_path), encoding="utf-8")
+        # Rotating handler caps disk usage: 5 MB per file, 2 backups.
+        fh = logging.handlers.RotatingFileHandler(
+            str(log_path),
+            maxBytes=5 * 1024 * 1024,
+            backupCount=2,
+            encoding="utf-8",
+        )
         fh.setFormatter(logging.Formatter(fmt))
         root.addHandler(fh)
     except Exception:

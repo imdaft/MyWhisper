@@ -31,7 +31,23 @@ logger = logging.getLogger(__name__)
 _WIDGET_WIDTH: int = 280
 _WIDGET_HEIGHT: int = 70
 _CORNER_RADIUS: float = 20.0
-_BG_COLOR: QColor = QColor(30, 30, 30, 220)
+
+# Overlay color palettes per theme. The recording indicator and VU-meter
+# gradient stay the same in both; only the surface and text colors change.
+_THEMES: dict[str, dict[str, QColor]] = {
+    "dark": {
+        "bg": QColor(30, 30, 30, 220),
+        "text": QColor(255, 255, 255, 240),
+        "timer": QColor(180, 180, 180, 200),
+        "vu_bg": QColor(60, 60, 60, 120),
+    },
+    "light": {
+        "bg": QColor(245, 245, 247, 230),
+        "text": QColor(20, 20, 20, 245),
+        "timer": QColor(90, 90, 90, 210),
+        "vu_bg": QColor(200, 200, 200, 150),
+    },
+}
 
 _INDICATOR_RADIUS: float = 6.0
 _INDICATOR_X: float = 24.0
@@ -66,11 +82,23 @@ class OverlayWidget(QWidget):
         "bottom_left",
     ]
 
-    def __init__(self, position: str = "bottom_center", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        position: str = "bottom_center",
+        theme: str = "dark",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
 
         self._setup_window_flags()
         self.setFixedSize(QSize(_WIDGET_WIDTH, _WIDGET_HEIGHT))
+
+        self._theme: str = theme if theme in _THEMES else "dark"
+        self._bg_color: QColor = QColor()
+        self._text_color: QColor = QColor()
+        self._timer_color: QColor = QColor()
+        self._vu_bg_color: QColor = QColor()
+        self._apply_palette()
 
         self._status_text: str = "Recording..."
         self._recording_seconds: float = 0.0
@@ -234,6 +262,18 @@ class OverlayWidget(QWidget):
         if self.isVisible():
             self._apply_position()
 
+    def _apply_palette(self) -> None:
+        palette = _THEMES.get(self._theme, _THEMES["dark"])
+        self._bg_color = palette["bg"]
+        self._text_color = palette["text"]
+        self._timer_color = palette["timer"]
+        self._vu_bg_color = palette["vu_bg"]
+
+    def set_theme(self, theme: str) -> None:
+        self._theme = theme if theme in _THEMES else "dark"
+        self._apply_palette()
+        self.update()
+
     # ------------------------------------------------------------------
     # Positioning
     # ------------------------------------------------------------------
@@ -301,7 +341,7 @@ class OverlayWidget(QWidget):
             _CORNER_RADIUS,
         )
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(_BG_COLOR)
+        painter.setBrush(self._bg_color)
         painter.drawPath(path)
 
     def _paint_indicator(self, painter: QPainter) -> None:
@@ -325,7 +365,7 @@ class OverlayWidget(QWidget):
         font = QFont("Segoe UI", _STATUS_FONT_SIZE)
         font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
-        painter.setPen(QPen(QColor(255, 255, 255, 240)))
+        painter.setPen(QPen(self._text_color))
 
         text_rect = QRectF(44, 8, _WIDGET_WIDTH - 44 - 60, 30)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._status_text)
@@ -339,7 +379,7 @@ class OverlayWidget(QWidget):
         font = QFont("Segoe UI", _TIMER_FONT_SIZE)
         font.setWeight(QFont.Weight.Normal)
         painter.setFont(font)
-        painter.setPen(QPen(QColor(180, 180, 180, 200)))
+        painter.setPen(QPen(self._timer_color))
 
         text_rect = QRectF(_WIDGET_WIDTH - 60, 8, 48, 30)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, timer_str)
@@ -366,7 +406,7 @@ class OverlayWidget(QWidget):
 
         bg_rect = QRectF(_VU_LEFT + bar_width, _VU_Y, _VU_MAX_WIDTH - bar_width, _VU_HEIGHT)
         if bg_rect.width() > 0:
-            painter.setBrush(QColor(60, 60, 60, 120))
+            painter.setBrush(self._vu_bg_color)
             bg_path = QPainterPath()
             bg_path.addRoundedRect(bg_rect, _VU_CORNER, _VU_CORNER)
             painter.drawPath(bg_path)

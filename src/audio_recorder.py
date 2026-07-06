@@ -118,6 +118,11 @@ class AudioRecorder(QObject):
             logger.error("Failed to query audio devices: %s", exc)
             return devices
 
+        # sounddevice returns a single dict (not a list) when only one device
+        # exists — normalize so the one microphone still shows up.
+        if isinstance(device_list, dict):
+            device_list = [device_list]
+
         for idx, dev in enumerate(device_list):
             if not isinstance(dev, dict):
                 continue

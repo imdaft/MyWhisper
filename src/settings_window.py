@@ -377,6 +377,10 @@ class SettingsWindow(QDialog):
             import sounddevice as sd
 
             device_list = sd.query_devices()
+            # sounddevice returns a single dict (not a list) when only one
+            # device exists — normalize so the one microphone still shows up.
+            if isinstance(device_list, dict):
+                device_list = [device_list]
 
             for idx, dev in enumerate(device_list):
                 if not isinstance(dev, dict):

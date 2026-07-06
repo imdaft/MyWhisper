@@ -143,7 +143,10 @@ class TextInserter:
 
     @staticmethod
     def _restore_clipboard(content: str | None) -> None:
-        if content is None:
+        # Skip restore for None (save failed) and for "" — pyperclip returns an
+        # empty string for a non-text clipboard (image/files) it cannot read, so
+        # copying "" back would needlessly clobber it. Leave our text instead.
+        if not content:
             return
         try:
             pyperclip.copy(content)

@@ -58,12 +58,11 @@ def main() -> None:
             if model is None:
                 _respond({"status": "error", "msg": "No model loaded"})
                 continue
+            audio_path = msg.get("audio_path")
             try:
                 import numpy as np
 
-                audio_path = msg["audio_path"]
                 audio = np.load(audio_path).astype(np.float32)
-                os.unlink(audio_path)
 
                 language = msg.get("language")
                 lang = language if language and language != "auto" else None
@@ -88,6 +87,14 @@ def main() -> None:
                 })
             except Exception as exc:
                 _respond({"status": "error", "msg": str(exc)})
+            finally:
+                # Always remove the temp audio file, even if np.load failed,
+                # so raw audio never lingers on disk.
+                if audio_path and os.path.exists(audio_path):
+                    try:
+                        os.unlink(audio_path)
+                    except OSError:
+                        pass
 
         else:
             _respond({"status": "error", "msg": f"Unknown command: {cmd}"})

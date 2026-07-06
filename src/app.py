@@ -18,6 +18,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Clips shorter/quieter than these are treated as accidental hotkey taps or
+# silence and dropped before Whisper, which can otherwise "hallucinate" phrases
+# (e.g. subtitle boilerplate) and paste them into the user's active window.
+_SAMPLE_RATE: int = 16000
+_MIN_CLIP_SEC: float = 0.25
+_MIN_CLIP_RMS: float = 0.004
+
 
 class TranscriptionWorker(QObject):
     finished = pyqtSignal(str)
@@ -67,6 +74,7 @@ class App(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._config = Config()
+        self._model_ready: bool = False
         self._worker_thread: QThread | None = None
         self._worker: TranscriptionWorker | None = None
         self._model_loader_thread: QThread | None = None
@@ -82,9 +90,14 @@ class App(QObject):
     def start(self) -> None:
         self._create_components()
         self._connect_signals()
+        self._apply_autostart(self._config.get("autostart", False))
         self._hotkey_manager.start()  # type: ignore[union-attr]
         self._tray_icon.show()  # type: ignore[union-attr]
+        self._tray_icon.setToolTip("MyWhisper — загрузка модели…")  # type: ignore[union-attr]
         logger.info("App started, loading model in background...")
+        self._tray_icon.notify(  # type: ignore[union-attr]
+            "MyWhisper", "Запущен. Загружаю модель Whisper…", "info",
+        )
         self._load_model_async()
 
     def _create_components(self) -> None:
@@ -102,6 +115,7 @@ class App(QObject):
         self._tray_icon = TrayIcon()
         self._overlay = OverlayWidget(
             position=self._config.get("overlay_position", "bottom_center"),
+            theme=self._config.get("theme", "dark"),
         )
 
         hotkey = self._config.get("hotkey", ["ctrl", "shift", "space"])
@@ -125,6 +139,9 @@ class App(QObject):
 
     def _load_model_async(self) -> None:
         assert self._transcriber is not None
+        if self._model_loader_thread is not None and self._model_loader_thread.isRunning():
+            logger.info("Model load already in progress, ignoring new request")
+            return
         model_size = self._config.get("model_size", "base")
         compute_type = self._config.get("compute_type", "auto")
 
@@ -143,10 +160,27 @@ class App(QObject):
     @pyqtSlot()
     def _on_model_loaded(self) -> None:
         logger.info("Model loaded successfully")
+        was_ready = self._model_ready
+        self._model_ready = True
+        if self._tray_icon is not None:
+            self._tray_icon.set_status("idle")
+            if not was_ready:
+                self._tray_icon.notify(
+                    "MyWhisper", "Модель готова. Нажмите хоткей и говорите.", "info",
+                )
 
     @pyqtSlot(str)
     def _on_model_load_error(self, error_msg: str) -> None:
         logger.error("Failed to load model: %s", error_msg)
+        self._model_ready = False
+        if self._tray_icon is not None:
+            self._tray_icon.setToolTip("MyWhisper — ошибка загрузки модели")
+            self._tray_icon.notify(
+                "MyWhisper",
+                "Не удалось загрузить модель Whisper. При первом запуске нужен "
+                "интернет для скачивания; проверьте связь и свободную память.",
+                "error",
+            )
 
     @pyqtSlot()
     def _cleanup_model_loader(self) -> None:
@@ -155,29 +189,72 @@ class App(QObject):
 
     @pyqtSlot()
     def _on_recording_start(self) -> None:
-        logger.info("Recording started")
         assert self._audio_recorder is not None
         assert self._overlay is not None
         assert self._tray_icon is not None
 
-        self._audio_recorder.start_recording()
+        if not self._model_ready:
+            logger.info("Hotkey pressed but model not ready yet")
+            self._tray_icon.notify(
+                "MyWhisper", "Модель ещё загружается, подождите…", "info",
+            )
+            return
+
+        logger.info("Recording started")
+        try:
+            self._audio_recorder.start_recording()
+        except Exception as exc:
+            logger.error("Failed to start recording: %s", exc)
+            self._tray_icon.notify(
+                "MyWhisper",
+                "Не удалось начать запись. Проверьте микрофон и его доступ "
+                "в настройках конфиденциальности Windows.",
+                "error",
+            )
+            return
+
         self._overlay.show_recording()
         self._tray_icon.set_status("recording")
 
     @pyqtSlot()
     def _on_recording_stop(self) -> None:
-        logger.info("Recording stopped")
         assert self._audio_recorder is not None
         assert self._overlay is not None
         assert self._tray_icon is not None
         assert self._transcriber is not None
 
+        # Recording never actually started (model not ready, mic error) — nothing to do.
+        if not self._audio_recorder.is_recording:
+            return
+
+        logger.info("Recording stopped")
         audio = self._audio_recorder.stop_recording()
+
+        # One clip at a time: don't start a second transcription while one runs.
+        # Leave the overlay/tray showing "processing" — the in-flight clip still
+        # owns them and its finalize step will clear them.
+        if self._worker_thread is not None and self._worker_thread.isRunning():
+            logger.warning("Transcription already in progress, dropping new clip")
+            self._overlay.show_processing()
+            self._tray_icon.set_status("processing")
+            self._tray_icon.notify(
+                "MyWhisper", "Ещё обрабатываю прошлую фразу, подождите…", "info",
+            )
+            return
+
         self._overlay.show_processing()
         self._tray_icon.set_status("processing")
 
         if audio is None or len(audio) == 0:
             logger.warning("Empty audio captured, skipping transcription")
+            self._finalize_transcription("")
+            return
+
+        # Drop accidental taps / near-silence before Whisper can hallucinate.
+        duration = len(audio) / _SAMPLE_RATE
+        rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        if duration < _MIN_CLIP_SEC or rms < _MIN_CLIP_RMS:
+            logger.info("Clip too short/quiet (%.2fs, rms=%.4f), skipping", duration, rms)
             self._finalize_transcription("")
             return
 
@@ -211,6 +288,10 @@ class App(QObject):
     @pyqtSlot(str)
     def _on_transcription_error(self, error_msg: str) -> None:
         logger.error("Transcription error: %s", error_msg)
+        if self._tray_icon is not None:
+            self._tray_icon.notify(
+                "MyWhisper", "Не удалось распознать речь. Подробности в журнале.", "error",
+            )
         self._finalize_transcription("")
 
     def _finalize_transcription(self, text: str) -> None:
@@ -260,11 +341,25 @@ class App(QObject):
         elif key == "hotkey_mode" and self._hotkey_manager is not None:
             self._hotkey_manager.set_mode(value)  # type: ignore[arg-type]
         elif key == "model_size":
+            self._model_ready = False
+            if self._tray_icon is not None:
+                self._tray_icon.setToolTip("MyWhisper — загрузка модели…")
             self._load_model_async()
         elif key == "audio_device" and self._audio_recorder is not None:
             self._audio_recorder.set_device(value)  # type: ignore[arg-type]
         elif key == "overlay_position" and self._overlay is not None:
             self._overlay.set_position(value)  # type: ignore[arg-type]
+        elif key == "theme" and self._overlay is not None:
+            self._overlay.set_theme(value)  # type: ignore[arg-type]
+        elif key == "autostart":
+            self._apply_autostart(bool(value))
+
+    def _apply_autostart(self, enabled: bool) -> None:
+        try:
+            from src import autostart
+            autostart.set_enabled(bool(enabled))
+        except Exception as exc:
+            logger.error("Autostart update failed: %s", exc)
 
     def cleanup(self) -> None:
         logger.info("Cleaning up...")

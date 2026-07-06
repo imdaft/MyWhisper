@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,12 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
 _VALID_MODEL_NAMES: set[str] = {m["name"] for m in AVAILABLE_MODELS}
 
 _WORKER_SCRIPT: str = str(Path(__file__).resolve().parent / "whisper_worker.py")
+
+# Worker response timeouts (seconds). The first model load may download several
+# GB from HuggingFace, so it gets a generous window; transcribing a short clip
+# is fast, so a hang there almost certainly means the worker is stuck.
+_LOAD_TIMEOUT: float = 1800.0
+_TRANSCRIBE_TIMEOUT: float = 180.0
 
 
 def _get_worker_cmd() -> list[str]:
@@ -60,44 +67,94 @@ class Transcriber(QObject):
         super().__init__(parent)
         self._model_size: str | None = None
         self._proc: subprocess.Popen | None = None
+        # Serializes access to the worker pipe so a model reload and a
+        # transcription (each on its own QThread) can never interleave their
+        # JSON messages on the shared stdin/stdout.
+        self._lock = threading.Lock()
 
     def _ensure_worker(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
-            return
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return
 
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW
+            # A previous worker may have died; make sure its handle is gone
+            # before spawning a replacement so we never orphan a process.
+            if self._proc is not None:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
 
-        self._proc = subprocess.Popen(
-            _get_worker_cmd(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            creationflags=creationflags,
-        )
-        logger.info("Whisper worker process started (pid=%d)", self._proc.pid)
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
 
-    def _send(self, msg: dict) -> dict:
-        assert self._proc is not None
-        assert self._proc.stdin is not None
-        assert self._proc.stdout is not None
+            self._proc = subprocess.Popen(
+                _get_worker_cmd(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                creationflags=creationflags,
+            )
+            logger.info("Whisper worker process started (pid=%d)", self._proc.pid)
 
-        line = json.dumps(msg, ensure_ascii=False) + "\n"
-        self._proc.stdin.write(line)
-        self._proc.stdin.flush()
+    def _send(self, msg: dict, timeout: float = _TRANSCRIBE_TIMEOUT) -> dict:
+        with self._lock:
+            assert self._proc is not None
+            assert self._proc.stdin is not None
+            assert self._proc.stdout is not None
+            proc = self._proc
 
-        resp_line = self._proc.stdout.readline()
-        if not resp_line:
-            stderr_out = ""
-            if self._proc.stderr:
-                stderr_out = self._proc.stderr.read()
-            self._proc = None
-            raise RuntimeError(f"Worker process died. stderr: {stderr_out[:1000]}")
+            line = json.dumps(msg, ensure_ascii=False) + "\n"
+            proc.stdin.write(line)
+            proc.stdin.flush()
 
-        return json.loads(resp_line)
+            # Read the reply on a helper thread so a hung/native worker can't
+            # block us forever — readline() has no timeout of its own.
+            holder: dict[str, Any] = {}
+
+            def _read() -> None:
+                try:
+                    holder["line"] = proc.stdout.readline()
+                except Exception as exc:  # pragma: no cover - defensive
+                    holder["exc"] = exc
+
+            reader = threading.Thread(target=_read, daemon=True)
+            reader.start()
+            reader.join(timeout)
+
+            if reader.is_alive():
+                logger.error("Worker did not respond within %.0fs, killing it", timeout)
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                if self._proc is proc:
+                    self._proc = None
+                    self._model_size = None
+                raise RuntimeError(f"Worker timed out after {timeout:.0f}s")
+
+            if "exc" in holder:
+                if self._proc is proc:
+                    self._proc = None
+                raise RuntimeError(f"Worker read error: {holder['exc']}")
+
+            resp_line = holder.get("line")
+            if not resp_line:
+                stderr_out = ""
+                try:
+                    if proc.stderr is not None:
+                        stderr_out = proc.stderr.read()
+                except Exception:
+                    pass
+                if self._proc is proc:
+                    self._proc = None
+                    self._model_size = None
+                raise RuntimeError(f"Worker process died. stderr: {stderr_out[:1000]}")
+
+            return json.loads(resp_line)
 
     def load_model(self, model_size: str, compute_type: str = "auto") -> None:
         if model_size not in _VALID_MODEL_NAMES:
@@ -113,12 +170,15 @@ class Transcriber(QObject):
         self._ensure_worker()
 
         try:
-            resp = self._send({
-                "cmd": "load",
-                "model": model_size,
-                "device": device,
-                "compute": resolved_compute,
-            })
+            resp = self._send(
+                {
+                    "cmd": "load",
+                    "model": model_size,
+                    "device": device,
+                    "compute": resolved_compute,
+                },
+                timeout=_LOAD_TIMEOUT,
+            )
         except Exception as exc:
             msg = f"Worker process error during model load: {exc}"
             logger.error(msg)
@@ -152,33 +212,45 @@ class Transcriber(QObject):
         np.save(tmp_path, audio.astype(np.float32))
 
         try:
-            resp = self._send({
-                "cmd": "transcribe",
-                "audio_path": tmp_path,
-                "language": language or "auto",
-            })
-        except Exception as exc:
-            msg = f"Worker process error during transcription: {exc}"
-            logger.error(msg)
-            self.error.emit(msg)
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            return ""
+            try:
+                resp = self._send(
+                    {
+                        "cmd": "transcribe",
+                        "audio_path": tmp_path,
+                        "language": language or "auto",
+                    },
+                    timeout=_TRANSCRIBE_TIMEOUT,
+                )
+            except Exception as exc:
+                # Worker died or hung: surface it so the caller (and the user)
+                # find out instead of silently receiving an empty result.
+                msg = f"Worker process error during transcription: {exc}"
+                logger.error(msg)
+                self.error.emit(msg)
+                raise
 
-        if resp.get("status") == "ok":
-            text = resp.get("text", "")
-            logger.info(
-                "Transcription complete: language=%s, probability=%.2f, length=%d chars",
-                resp.get("lang", "?"), resp.get("prob", 0.0), len(text),
-            )
-            self.transcription_done.emit(text)
-            return text
-        else:
+            if resp.get("status") == "ok":
+                text = resp.get("text", "")
+                logger.info(
+                    "Transcription complete: language=%s, probability=%.2f, length=%d chars",
+                    resp.get("lang", "?"), resp.get("prob", 0.0), len(text),
+                )
+                self.transcription_done.emit(text)
+                return text
+
             err = resp.get("msg", "Unknown error")
             msg = f"Transcription failed: {err}"
             logger.error(msg)
             self.error.emit(msg)
             return ""
+        finally:
+            # We own the temp file's lifetime. The worker also unlinks it after
+            # loading, so it may already be gone — guard with exists().
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def is_model_loaded(self) -> bool:
         return self._model_size is not None and self._proc is not None and self._proc.poll() is None
@@ -192,16 +264,17 @@ class Transcriber(QObject):
         return self._model_size
 
     def shutdown(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
-            try:
-                assert self._proc.stdin is not None
-                self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
-                self._proc.stdin.flush()
-            except OSError:
-                pass
-            try:
-                self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
-        self._model_size = None
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                try:
+                    assert self._proc.stdin is not None
+                    self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
+                    self._proc.stdin.flush()
+                except OSError:
+                    pass
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+            self._proc = None
+            self._model_size = None

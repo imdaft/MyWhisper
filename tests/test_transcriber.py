@@ -64,11 +64,13 @@ def _make_transcriber_with_fake(responses: list[dict]) -> tuple[Transcriber, _Fa
 
     original_send = t._send
 
-    def mock_send(msg: dict) -> dict:
+    def mock_send(msg: dict, timeout: float | None = None) -> dict:
         fake._sent.append(msg)
         fake._prepare_stdout()
         t._proc = fake  # type: ignore
-        return original_send(msg)
+        if timeout is None:
+            return original_send(msg)
+        return original_send(msg, timeout=timeout)
 
     t._send = mock_send  # type: ignore
     t._proc = fake  # type: ignore
