@@ -57,8 +57,8 @@ class TestConfigDefaults(unittest.TestCase):
     def test_default_autostart(self) -> None:
         self.assertFalse(DEFAULT_CONFIG["autostart"])
 
-    def test_default_compute_type(self) -> None:
-        self.assertEqual(DEFAULT_CONFIG["compute_type"], "auto")
+    def test_default_device(self) -> None:
+        self.assertEqual(DEFAULT_CONFIG["device"], "auto")
 
 
 class TestConfigLoadCreatesFile(unittest.TestCase):

@@ -23,7 +23,13 @@ def setUpModule() -> None:
         _app = QApplication([])
 
 
-from src.transcriber import Transcriber, AVAILABLE_MODELS, _detect_device, _resolve_compute_type
+from src.transcriber import (
+    Transcriber,
+    AVAILABLE_MODELS,
+    _detect_device,
+    _resolve_device,
+    _compute_for_device,
+)
 
 
 class _FakePopen:
@@ -146,8 +152,7 @@ class TestLoadModel(unittest.TestCase):
 
     def test_load_model_sends_correct_cmd(self) -> None:
         t, fake = _make_transcriber_with_fake([{"status": "ok"}])
-        with patch("src.transcriber._detect_device", return_value="cpu"):
-            t.load_model("small", compute_type="int8")
+        t.load_model("small", device_pref="cpu")
         self.assertEqual(len(fake._sent), 1)
         sent = fake._sent[0]
         self.assertEqual(sent["cmd"], "load")
@@ -158,13 +163,15 @@ class TestLoadModel(unittest.TestCase):
     def test_load_model_auto_compute_cpu(self) -> None:
         t, fake = _make_transcriber_with_fake([{"status": "ok"}])
         with patch("src.transcriber._detect_device", return_value="cpu"):
-            t.load_model("base", compute_type="auto")
+            t.load_model("base", device_pref="auto")
+        self.assertEqual(fake._sent[0]["device"], "cpu")
         self.assertEqual(fake._sent[0]["compute"], "int8")
 
     def test_load_model_auto_compute_cuda(self) -> None:
         t, fake = _make_transcriber_with_fake([{"status": "ok"}])
         with patch("src.transcriber._detect_device", return_value="cuda"):
-            t.load_model("base", compute_type="auto")
+            t.load_model("base", device_pref="auto")
+        self.assertEqual(fake._sent[0]["device"], "cuda")
         self.assertEqual(fake._sent[0]["compute"], "float16")
 
     def test_load_model_error_emits_error(self) -> None:
@@ -254,14 +261,24 @@ class TestHelperFunctions(unittest.TestCase):
         with patch("ctranslate2.get_cuda_device_count", return_value=1):
             self.assertEqual(_detect_device(), "cuda")
 
-    def test_resolve_compute_type_auto_cpu(self) -> None:
-        self.assertEqual(_resolve_compute_type("auto", "cpu"), "int8")
+    def test_resolve_device_cpu_pref(self) -> None:
+        self.assertEqual(_resolve_device("cpu"), "cpu")
 
-    def test_resolve_compute_type_auto_cuda(self) -> None:
-        self.assertEqual(_resolve_compute_type("auto", "cuda"), "float16")
+    def test_resolve_device_auto_follows_detection(self) -> None:
+        with patch("src.transcriber._cuda_available", return_value=False):
+            self.assertEqual(_resolve_device("auto"), "cpu")
+        with patch("src.transcriber._cuda_available", return_value=True):
+            self.assertEqual(_resolve_device("auto"), "cuda")
 
-    def test_resolve_compute_type_explicit(self) -> None:
-        self.assertEqual(_resolve_compute_type("float32", "cpu"), "float32")
+    def test_resolve_device_cuda_pref_falls_back_to_cpu(self) -> None:
+        with patch("src.transcriber._cuda_available", return_value=False):
+            self.assertEqual(_resolve_device("cuda"), "cpu")
+        with patch("src.transcriber._cuda_available", return_value=True):
+            self.assertEqual(_resolve_device("cuda"), "cuda")
+
+    def test_compute_for_device(self) -> None:
+        self.assertEqual(_compute_for_device("cpu"), "int8")
+        self.assertEqual(_compute_for_device("cuda"), "float16")
 
 
 if __name__ == "__main__":

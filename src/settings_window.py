@@ -50,10 +50,10 @@ _MODELS: list[tuple[str, str]] = [
     ("large-v3-turbo", "large-v3-turbo (~1.5GB, быстрый)"),
 ]
 
-_COMPUTE_OPTIONS: list[tuple[str, str]] = [
-    ("auto", "Auto"),
+_DEVICES: list[tuple[str, str]] = [
+    ("auto", "Авто"),
     ("cpu", "CPU"),
-    ("cuda", "GPU (CUDA)"),
+    ("cuda", "GPU (NVIDIA)"),
 ]
 
 _OVERLAY_POSITIONS: list[tuple[str, str]] = [
@@ -343,10 +343,10 @@ class SettingsWindow(QDialog):
             self._model_combo.addItem(label, value)
         form.addRow("Model:", self._model_combo)
 
-        self._compute_combo = QComboBox()
-        for value, label in _COMPUTE_OPTIONS:
-            self._compute_combo.addItem(label, value)
-        form.addRow("Compute:", self._compute_combo)
+        self._device_combo = QComboBox()
+        for value, label in _DEVICES:
+            self._device_combo.addItem(label, value)
+        form.addRow("Ускорение:", self._device_combo)
 
         self._model_status_label = QLabel("Model not downloaded")
         self._model_status_label.setStyleSheet("color: #888;")
@@ -435,8 +435,8 @@ class SettingsWindow(QDialog):
         model_size: str = self._config.get("model_size", "base")
         self._set_combo_by_data(self._model_combo, model_size)
 
-        compute_type: str = self._config.get("compute_type", "auto")
-        self._set_combo_by_data(self._compute_combo, compute_type)
+        device: str = self._config.get("device", "auto")
+        self._set_combo_by_data(self._device_combo, device)
 
         theme: str = self._config.get("theme", "dark")
         self._set_combo_by_data(self._theme_combo, theme)
@@ -454,7 +454,7 @@ class SettingsWindow(QDialog):
         self._config.set("autostart", self._autostart_check.isChecked())
         self._config.set("audio_device", self._mic_combo.currentData())
         self._config.set("model_size", self._model_combo.currentData())
-        self._config.set("compute_type", self._compute_combo.currentData())
+        self._config.set("device", self._device_combo.currentData())
         self._config.set("theme", self._theme_combo.currentData())
         self._config.set("overlay_position", self._overlay_combo.currentData())
         self._config.set("custom_words", self._dictionary_edit.toPlainText())

@@ -57,16 +57,16 @@ class _ModelLoader(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, transcriber: Transcriber, model_size: str, compute_type: str) -> None:
+    def __init__(self, transcriber: Transcriber, model_size: str, device_pref: str) -> None:
         super().__init__()
         self._transcriber = transcriber
         self._model_size = model_size
-        self._compute_type = compute_type
+        self._device_pref = device_pref
 
     @pyqtSlot()
     def run(self) -> None:
         try:
-            self._transcriber.load_model(self._model_size, compute_type=self._compute_type)
+            self._transcriber.load_model(self._model_size, device_pref=self._device_pref)
             if self._transcriber.is_model_loaded():
                 self.finished.emit()
             else:
@@ -150,10 +150,10 @@ class App(QObject):
             logger.info("Model load already in progress, ignoring new request")
             return
         model_size = self._config.get("model_size", "base")
-        compute_type = self._config.get("compute_type", "auto")
+        device_pref = self._config.get("device", "auto")
 
         self._model_loader_thread = QThread()
-        self._model_loader = _ModelLoader(self._transcriber, model_size, compute_type)
+        self._model_loader = _ModelLoader(self._transcriber, model_size, device_pref)
         self._model_loader.moveToThread(self._model_loader_thread)
         self._model_loader_thread.started.connect(self._model_loader.run)
         self._model_loader.finished.connect(self._on_model_loaded)
@@ -358,7 +358,7 @@ class App(QObject):
             self._hotkey_manager.set_hotkey(tuple(value))  # type: ignore[arg-type]
         elif key == "hotkey_mode" and self._hotkey_manager is not None:
             self._hotkey_manager.set_mode(value)  # type: ignore[arg-type]
-        elif key == "model_size":
+        elif key in ("model_size", "device"):
             self._model_ready = False
             if self._tray_icon is not None:
                 self._tray_icon.setToolTip("MyWhisper — загрузка модели…")

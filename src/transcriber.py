@@ -43,22 +43,32 @@ def _get_worker_cmd() -> list[str]:
     return [sys.executable, _WORKER_SCRIPT]
 
 
-def _detect_device() -> str:
-    # Use CTranslate2 (the faster-whisper backend) to detect a usable GPU. This
-    # avoids depending on torch just for device detection — torch is a ~2 GB
-    # dependency that faster-whisper does not otherwise need.
+def _cuda_available() -> bool:
+    # CTranslate2 (the faster-whisper backend) reports usable NVIDIA GPUs
+    # without pulling in torch (a ~2 GB dependency faster-whisper doesn't need).
     try:
         import ctranslate2
-        if ctranslate2.get_cuda_device_count() > 0:
-            return "cuda"
+        return ctranslate2.get_cuda_device_count() > 0
     except Exception:
-        pass
-    return "cpu"
+        return False
 
 
-def _resolve_compute_type(compute_type: str, device: str) -> str:
-    if compute_type != "auto":
-        return compute_type
+def _detect_device() -> str:
+    return "cuda" if _cuda_available() else "cpu"
+
+
+def _resolve_device(pref: str) -> str:
+    """Turn a user device preference (auto/cpu/cuda) into a real device, falling
+    back to CPU if a GPU was requested but none is available."""
+    if pref == "cpu":
+        return "cpu"
+    if pref in ("cuda", "gpu"):
+        return "cuda" if _cuda_available() else "cpu"
+    return _detect_device()  # "auto" or anything unexpected
+
+
+def _compute_for_device(device: str) -> str:
+    # ctranslate2 compute types: float16 is the right default on GPU, int8 on CPU.
     return "float16" if device == "cuda" else "int8"
 
 
@@ -160,16 +170,19 @@ class Transcriber(QObject):
 
             return json.loads(resp_line)
 
-    def load_model(self, model_size: str, compute_type: str = "auto") -> None:
+    def load_model(self, model_size: str, device_pref: str = "auto") -> None:
         if model_size not in _VALID_MODEL_NAMES:
             msg = f"Unknown model size '{model_size}'. Available: {sorted(_VALID_MODEL_NAMES)}"
             logger.error(msg)
             self.error.emit(msg)
             return
 
-        device = _detect_device()
-        resolved_compute = _resolve_compute_type(compute_type, device)
-        logger.info("Loading model '%s' on %s with compute_type=%s", model_size, device, resolved_compute)
+        device = _resolve_device(device_pref)
+        compute = _compute_for_device(device)
+        logger.info(
+            "Loading model '%s' on %s (compute=%s, pref=%s)",
+            model_size, device, compute, device_pref,
+        )
 
         self._ensure_worker()
 
@@ -179,7 +192,7 @@ class Transcriber(QObject):
                     "cmd": "load",
                     "model": model_size,
                     "device": device,
-                    "compute": resolved_compute,
+                    "compute": compute,
                 },
                 timeout=_LOAD_TIMEOUT,
             )

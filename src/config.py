@@ -20,7 +20,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "overlay_position": "bottom_center",
     "theme": "dark",
     "autostart": False,
-    "compute_type": "auto",
+    # Device preference for Whisper: "auto" | "cpu" | "cuda". The precision
+    # (int8/float16) is derived from the resolved device automatically.
+    "device": "auto",
     # User dictionary: names / terms fed to Whisper as hotwords to improve
     # recognition. Free text, one word or phrase per line.
     "custom_words": "",
