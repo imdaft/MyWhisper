@@ -60,6 +60,9 @@ class TestConfigDefaults(unittest.TestCase):
     def test_default_device(self) -> None:
         self.assertEqual(DEFAULT_CONFIG["device"], "auto")
 
+    def test_default_duck_audio(self) -> None:
+        self.assertEqual(DEFAULT_CONFIG["duck_audio"], "quiet")
+
 
 class TestConfigLoadCreatesFile(unittest.TestCase):
     """Config.load() should create the config file if it does not exist."""

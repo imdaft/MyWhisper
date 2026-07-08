@@ -56,6 +56,12 @@ _DEVICES: list[tuple[str, str]] = [
     ("cuda", "GPU (NVIDIA)"),
 ]
 
+_DUCK_LEVELS: list[tuple[str, str]] = [
+    ("off", "Не трогать"),
+    ("quiet", "Приглушать (тихо)"),
+    ("mute", "Выключать полностью"),
+]
+
 _OVERLAY_POSITIONS: list[tuple[str, str]] = [
     ("bottom_center", "Bottom Center"),
     ("top_center", "Top Center"),
@@ -338,6 +344,15 @@ class SettingsWindow(QDialog):
         mic_test_widget.setLayout(mic_test_layout)
         form.addRow("", mic_test_widget)
 
+        self._duck_combo = QComboBox()
+        for value, label in _DUCK_LEVELS:
+            self._duck_combo.addItem(label, value)
+        self._duck_combo.setToolTip(
+            "Приглушает звук других приложений (музыку, видео) пока идёт запись, "
+            "и возвращает громкость обратно сразу после."
+        )
+        form.addRow("Другие звуки при записи:", self._duck_combo)
+
         self._model_combo = QComboBox()
         for value, label in _MODELS:
             self._model_combo.addItem(label, value)
@@ -432,6 +447,9 @@ class SettingsWindow(QDialog):
         else:
             self._mic_combo.setCurrentIndex(0)
 
+        duck_audio: str = self._config.get("duck_audio", "quiet")
+        self._set_combo_by_data(self._duck_combo, duck_audio)
+
         model_size: str = self._config.get("model_size", "base")
         self._set_combo_by_data(self._model_combo, model_size)
 
@@ -453,6 +471,7 @@ class SettingsWindow(QDialog):
         self._config.set("language", self._language_combo.currentData())
         self._config.set("autostart", self._autostart_check.isChecked())
         self._config.set("audio_device", self._mic_combo.currentData())
+        self._config.set("duck_audio", self._duck_combo.currentData())
         self._config.set("model_size", self._model_combo.currentData())
         self._config.set("device", self._device_combo.currentData())
         self._config.set("theme", self._theme_combo.currentData())

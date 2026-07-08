@@ -26,6 +26,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # User dictionary: names / terms fed to Whisper as hotwords to improve
     # recognition. Free text, one word or phrase per line.
     "custom_words": "",
+    # Duck (lower) other apps' audio while recording: "off" | "quiet" | "mute".
+    # See src/audio_ducking.py DUCK_LEVELS for the numeric mapping.
+    "duck_audio": "quiet",
 }
 
 

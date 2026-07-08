@@ -15,6 +15,7 @@ setup(
         "pynput>=1.7.6",
         "pyperclip>=1.8.2",
         "pyautogui>=0.9.54",
+        "pycaw>=20240210",
     ],
     entry_points={
         "console_scripts": [

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from src.config import Config
 
 if TYPE_CHECKING:
+    from src.audio_ducking import AudioDucker
     from src.audio_recorder import AudioRecorder
     from src.hotkey_manager import HotkeyManager
     from src.overlay_widget import OverlayWidget
@@ -88,6 +89,7 @@ class App(QObject):
 
         self._hotkey_manager: HotkeyManager | None = None
         self._audio_recorder: AudioRecorder | None = None
+        self._audio_ducker: AudioDucker | None = None
         self._transcriber: Transcriber | None = None
         self._text_inserter: TextInserter | None = None
         self._tray_icon: TrayIcon | None = None
@@ -108,6 +110,7 @@ class App(QObject):
         self._load_model_async()
 
     def _create_components(self) -> None:
+        from src.audio_ducking import AudioDucker
         from src.audio_recorder import AudioRecorder
         from src.hotkey_manager import HotkeyManager
         from src.overlay_widget import OverlayWidget
@@ -117,6 +120,7 @@ class App(QObject):
 
         device = self._config.get("audio_device")
         self._audio_recorder = AudioRecorder(device_id=device)
+        self._audio_ducker = AudioDucker()
         self._transcriber = Transcriber()
         self._text_inserter = TextInserter()
         self._tray_icon = TrayIcon()
@@ -222,6 +226,15 @@ class App(QObject):
 
         self._overlay.show_recording()
         self._tray_icon.set_status("recording")
+        self._duck_other_audio()
+
+    def _duck_other_audio(self) -> None:
+        if self._audio_ducker is None:
+            return
+        from src.audio_ducking import DUCK_LEVELS
+        level = DUCK_LEVELS.get(self._config.get("duck_audio", "quiet"))
+        if level is not None:
+            self._audio_ducker.duck(level)
 
     @pyqtSlot()
     def _on_recording_stop(self) -> None:
@@ -236,6 +249,8 @@ class App(QObject):
 
         logger.info("Recording stopped")
         audio = self._audio_recorder.stop_recording()
+        if self._audio_ducker is not None:
+            self._audio_ducker.restore()
 
         # One clip at a time: don't start a second transcription while one runs.
         # Leave the overlay/tray showing "processing" — the in-flight clip still
@@ -403,6 +418,9 @@ class App(QObject):
 
         if self._hotkey_manager is not None:
             self._hotkey_manager.stop()
+
+        if self._audio_ducker is not None:
+            self._audio_ducker.restore()
 
         if self._transcriber is not None:
             self._transcriber.shutdown()
