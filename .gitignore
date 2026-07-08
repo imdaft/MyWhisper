@@ -25,3 +25,4 @@ desktop.ini
 
 # Local config
 config.json
+*.zip
