@@ -195,8 +195,15 @@ class App(QObject):
 
     @pyqtSlot()
     def _cleanup_model_loader(self) -> None:
+        thread = self._model_loader_thread
         self._model_loader = None
         self._model_loader_thread = None
+        # Schedule the QThread's C++ destruction on the next event loop turn
+        # instead of letting Python's refcount drop trigger it synchronously —
+        # doing that from inside a nested loop (e.g. the Settings dialog's
+        # exec()) can block the whole app waiting on internal Qt teardown.
+        if thread is not None:
+            thread.deleteLater()
 
     @pyqtSlot()
     def _on_recording_start(self) -> None:
@@ -341,8 +348,13 @@ class App(QObject):
         self._tray_icon.set_status("idle")
 
     def _cleanup_worker(self) -> None:
+        thread = self._worker_thread
         self._worker = None
         self._worker_thread = None
+        # See _cleanup_model_loader — deleteLater() avoids a synchronous,
+        # potentially blocking teardown if this fires inside a nested loop.
+        if thread is not None:
+            thread.deleteLater()
 
     @pyqtSlot(float)
     def _on_audio_level(self, level: float) -> None:
