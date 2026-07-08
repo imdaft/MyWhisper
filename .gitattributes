@@ -1,0 +1,23 @@
+# Normalize line endings: text files use LF in the repo, checked out with the
+# platform's native ending. Binary files are never touched by line-ending
+# conversion.
+* text=auto eol=lf
+
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.spec text eol=lf
+*.cfg text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.zip binary
