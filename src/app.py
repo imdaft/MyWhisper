@@ -235,6 +235,17 @@ class App(QObject):
             )
             return
 
+        # Refuse to start a new recording while the previous clip is still
+        # being transcribed. A rapid double hotkey-tap used to let a second
+        # recording start while the first clip's QThread was still in
+        # flight — that overlap is implicated in a real native crash.
+        if self._worker_thread is not None and self._worker_thread.isRunning():
+            logger.info("Hotkey pressed while previous clip still processing, ignoring")
+            self._tray_icon.notify(
+                "MyWhisper", "Ещё обрабатываю прошлую фразу, подождите…", "info",
+            )
+            return
+
         logger.info("Recording started")
         try:
             self._audio_recorder.start_recording()
