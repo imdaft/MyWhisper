@@ -369,8 +369,12 @@ class App(QObject):
 
         clean = text.strip()
         if clean:
-            self._text_inserter.insert_text(clean)
+            # Record the phrase (menu + on-disk backup) BEFORE attempting
+            # insertion, so it's always recoverable via "Copy last phrase"
+            # even if insertion fails, the target field lost focus, or the
+            # app crashes right after.
             self._tray_icon.show_last_phrase(clean)
+            self._text_inserter.insert_text(clean)
 
         self._overlay.hide_overlay()
         self._tray_icon.set_status("idle")

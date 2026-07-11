@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Final
 
+import pyperclip
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QMenu, QMessageBox, QSystemTrayIcon
 
 logger = logging.getLogger(__name__)
+
+
+def _get_last_phrase_path() -> Path:
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        appdata = str(Path.home() / "AppData" / "Roaming")
+    return Path(appdata) / "MyWhisper" / "last_phrase.txt"
 
 _ICON_SIZE: Final[int] = 32
 
@@ -72,7 +82,9 @@ class TrayIcon(QSystemTrayIcon):
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self._status: str = "idle"
-        self._last_text: str = ""
+        # Restored from disk so the last spoken phrase survives an app
+        # restart or crash, not just a lost focus/failed insertion.
+        self._last_text: str = self._load_persisted_last_phrase()
         self._icons: dict[str, QIcon] = {
             state: _create_microphone_icon(color)
             for state, color in _STATE_COLORS.items()
@@ -94,8 +106,9 @@ class TrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
-        self._last_phrase_action = QAction("Last: (none)", menu)
-        self._last_phrase_action.setEnabled(False)
+        self._last_phrase_action = QAction(self._format_last_phrase_label(self._last_text), menu)
+        self._last_phrase_action.setEnabled(bool(self._last_text))
+        self._last_phrase_action.triggered.connect(self._on_copy_last_phrase)
         menu.addAction(self._last_phrase_action)
 
         menu.addSeparator()
@@ -126,9 +139,46 @@ class TrayIcon(QSystemTrayIcon):
 
     def show_last_phrase(self, text: str) -> None:
         self._last_text = text
-        display = text if len(text) <= 60 else text[:57] + "..."
-        self._last_phrase_action.setText(f"Last: {display}")
+        self._persist_last_phrase(text)
+        self._last_phrase_action.setText(self._format_last_phrase_label(text))
+        self._last_phrase_action.setEnabled(bool(text))
         self.showMessage("MyWhisper", text, QSystemTrayIcon.MessageIcon.Information, 3000)
+
+    def _on_copy_last_phrase(self) -> None:
+        if not self._last_text:
+            return
+        try:
+            pyperclip.copy(self._last_text)
+            self.notify("MyWhisper", "Скопировано в буфер обмена", "info")
+        except Exception:
+            # Do NOT log exc_info here -- the phrase content may be sensitive.
+            logger.warning("Failed to copy last phrase to clipboard")
+
+    @staticmethod
+    def _format_last_phrase_label(text: str) -> str:
+        if not text:
+            return "Копировать: (нет)"
+        display = text if len(text) <= 60 else text[:57] + "..."
+        return f"Копировать: {display}"
+
+    @staticmethod
+    def _persist_last_phrase(text: str) -> None:
+        try:
+            path = _get_last_phrase_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        except OSError:
+            logger.warning("Could not persist last phrase to disk")
+
+    @staticmethod
+    def _load_persisted_last_phrase() -> str:
+        try:
+            path = _get_last_phrase_path()
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+        return ""
 
     def notify(self, title: str, message: str, level: str = "info") -> None:
         """Show a tray balloon notification (info / warning / error)."""
