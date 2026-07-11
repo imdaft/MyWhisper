@@ -298,17 +298,26 @@ class Transcriber(QObject):
         return self._model_size
 
     def shutdown(self) -> None:
-        with self._lock:
-            if self._proc is not None and self._proc.poll() is None:
+        # Bounded lock wait: if a load/transcribe is stuck (e.g. a stalled
+        # model download or a hung worker), the app must still be able to
+        # quit within a few seconds instead of blocking on a lock someone
+        # else holds for as long as _LOAD_TIMEOUT/_TRANSCRIBE_TIMEOUT allow.
+        acquired = self._lock.acquire(timeout=5)
+        try:
+            proc = self._proc
+            if proc is not None and proc.poll() is None:
                 try:
-                    assert self._proc.stdin is not None
-                    self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
-                    self._proc.stdin.flush()
+                    assert proc.stdin is not None
+                    proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
+                    proc.stdin.flush()
                 except OSError:
                     pass
                 try:
-                    self._proc.wait(timeout=5)
+                    proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    self._proc.kill()
+                    proc.kill()
             self._proc = None
             self._model_size = None
+        finally:
+            if acquired:
+                self._lock.release()

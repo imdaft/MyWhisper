@@ -5,7 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 
 from src.config import Config
 
@@ -167,6 +167,23 @@ class App(QObject):
         # Clean up only AFTER the thread has fully stopped
         self._model_loader_thread.finished.connect(self._cleanup_model_loader)
         self._model_loader_thread.start()
+
+        # A first-time model download (or a slow connection) can take a
+        # while with zero visible feedback otherwise — let the user know
+        # it's still working instead of looking silently frozen.
+        QTimer.singleShot(25_000, lambda t=self._model_loader_thread: self._on_model_load_slow(t))
+
+    def _on_model_load_slow(self, thread: QThread) -> None:
+        # Guard against a stale timer: only notify if THIS load attempt is
+        # still the current, still-running one (a fast load or a newer
+        # attempt should not trigger this).
+        if thread is self._model_loader_thread and thread.isRunning() and self._tray_icon is not None:
+            self._tray_icon.notify(
+                "MyWhisper",
+                "Модель ещё грузится — при первом запуске или на медленном "
+                "интернете это может занять несколько минут.",
+                "info",
+            )
 
     @pyqtSlot()
     def _on_model_loaded(self) -> None:
